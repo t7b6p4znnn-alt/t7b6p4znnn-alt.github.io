@@ -1,0 +1,990 @@
+<!DOCTYPE html>
+<html lang="fi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Tierekisteriosoite</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { height:100%; overflow:hidden; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background:#1a1a2e; color:white;
+  }
+  #page-home, #page-gallery {
+    position:fixed; inset:0;
+    display:flex; flex-direction:column;
+    height:100dvh; width:100vw;
+  }
+  #page-gallery { display:none; }
+  body.gallery-active #page-home { display:none; }
+  body.gallery-active #page-gallery { display:flex; }
+
+  /* ---------- top bar ---------- */
+  .topbar {
+    display:flex; align-items:center; justify-content:space-between;
+    padding:6px 10px; background:#12122a; flex-shrink:0;
+  }
+  .topbar h1 { font-size:1em; color:#4cc9f0; display:flex; align-items:center; gap:6px; }
+  .auto-dot { font-size:0.65em; color:#00c853; }
+  .top-btn {
+    background:rgba(76,201,240,0.15); border:1px solid #4cc9f0; color:#4cc9f0;
+    padding:6px 10px; border-radius:8px; font-size:0.8em; font-weight:600; cursor:pointer;
+  }
+
+  .status { text-align:center; padding:4px; font-size:0.78em; flex-shrink:0; }
+  .status.loading { background:rgba(76,201,240,0.2); color:#4cc9f0; }
+  .status.error { background:rgba(247,37,133,0.2); color:#f72585; }
+  .status.success { background:rgba(0,200,83,0.2); color:#00c853; }
+
+  /* ---------- info panel ---------- */
+  .info-box {
+    background:linear-gradient(135deg,#16213e 0%,#1a1a2e 100%);
+    border-bottom:2px solid #4cc9f0;
+    padding:8px 10px;
+    flex-shrink:0;
+    max-height:42vh; overflow-y:auto;
+    transition: max-height .25s ease, padding .25s ease, opacity .25s ease;
+  }
+  .info-box.collapsed { max-height:0; padding:0 10px; opacity:0; overflow:hidden; border-bottom:none; }
+
+  .primary-type-label { text-align:center; font-size:0.65em; color:#aaa; text-transform:uppercase; }
+  .address-display { font-size:1.5em; font-weight:bold; text-align:center; color:#f72585; margin:2px 0; }
+  .road-name { text-align:center; font-size:0.82em; color:#4cc9f0; }
+  .sub-info { text-align:center; font-size:0.68em; color:#9be8ff; margin-top:2px; }
+  .sub-info.dim { color:#888; }
+
+  .secondary-addresses { margin-top:5px; }
+  .secondary-row {
+    display:flex; justify-content:space-between; align-items:center;
+    background:rgba(76,201,240,0.08); border-radius:8px; padding:4px 8px; margin-top:3px; font-size:0.72em;
+  }
+  .secondary-row .stype { color:#aaa; }
+  .secondary-row .saddr { color:#4cc9f0; font-weight:bold; }
+  .secondary-row .sdist { color:#888; }
+
+  .extra-info { display:grid; grid-template-columns:1fr 1fr 1fr; gap:5px; margin-top:6px; }
+  .extra-item { background:rgba(247,37,133,0.1); padding:5px; border-radius:8px; text-align:center; }
+  .extra-item.direction-forward { background:rgba(0,200,83,0.2); }
+  .extra-item.direction-backward { background:rgba(255,152,0,0.2); }
+  .extra-label { font-size:0.58em; color:#aaa; text-transform:uppercase; }
+  .extra-value { font-size:0.85em; font-weight:bold; color:#4cc9f0; }
+  .extra-item.direction-forward .extra-value { color:#00c853; }
+  .extra-item.direction-backward .extra-value { color:#ff9800; }
+
+  .coords { font-size:0.68em; color:#888; text-align:center; margin-top:4px; }
+
+  /* ---------- map ---------- */
+  .map-wrap { position:relative; flex:1 1 auto; min-height:0; }
+  #map { position:absolute; inset:0; }
+  .map-expand-btn {
+    position:absolute; top:8px; right:8px; z-index:500;
+    background:rgba(20,20,40,0.85); border:2px solid #4cc9f0; color:#4cc9f0;
+    width:38px; height:38px; border-radius:10px; font-size:1.1em; cursor:pointer;
+  }
+
+  /* ---------- radius control ---------- */
+  .radius-bar {
+    display:flex; align-items:center; gap:8px;
+    padding:6px 12px; background:#12122a; flex-shrink:0; font-size:0.78em;
+  }
+  .radius-bar input[type=range] { flex:1; accent-color:#4cc9f0; }
+  .radius-val { color:#4cc9f0; font-weight:bold; min-width:44px; text-align:right; }
+
+  /* ---------- filter buttons ---------- */
+  .filter-buttons { display:flex; gap:5px; padding:6px 10px; background:#12122a; flex-shrink:0; }
+  .filter-btn {
+    flex:1; padding:8px 2px; border:2px solid #4cc9f0; border-radius:14px;
+    background:transparent; color:#4cc9f0; font-size:0.78em; font-weight:600; cursor:pointer;
+  }
+  .filter-btn.active { background:#4cc9f0; color:#1a1a2e; }
+  .filter-btn:active { transform:scale(0.95); }
+
+  /* ---------- action buttons ---------- */
+  .btn-group {
+    display:flex; gap:6px; padding:8px 10px;
+    padding-bottom: max(8px, env(safe-area-inset-bottom));
+    background:#12122a; flex-shrink:0;
+  }
+  .btn { flex:1; padding:12px 2px; border:none; border-radius:10px; font-size:0.85em; font-weight:bold; cursor:pointer; color:white; }
+  .btn-primary { background:linear-gradient(135deg,#4cc9f0 0%,#4361ee 100%); }
+  .btn-secondary { background:linear-gradient(135deg,#f72585 0%,#b5179e 100%); }
+  .btn-video { background:linear-gradient(135deg,#ff9800 0%,#e65100 100%); }
+  .btn:active { transform:scale(0.95); }
+  .btn:disabled { opacity:0.5; cursor:not-allowed; }
+
+  /* ---------- gallery page ---------- */
+  .gallery-topbar { display:flex; align-items:center; gap:8px; padding:8px 10px; background:#12122a; flex-shrink:0; }
+  .gallery-topbar h1 { font-size:1em; color:#4cc9f0; flex:1; }
+  .gallery-map-wrap { position:relative; height:32vh; flex-shrink:0; }
+  #gallery-map { position:absolute; inset:0; }
+  .sort-bar { display:flex; gap:6px; align-items:center; padding:8px 10px; background:#12122a; flex-shrink:0; }
+  .sort-bar label { font-size:0.78em; color:#aaa; }
+  .sort-bar select {
+    flex:1; background:#1a1a2e; color:#4cc9f0; border:1px solid #4cc9f0; border-radius:8px; padding:6px; font-size:0.85em;
+  }
+  .gallery-list { flex:1; overflow-y:auto; padding:8px 10px; }
+  .gallery-empty { text-align:center; color:#888; margin-top:40px; font-size:0.9em; }
+  .gallery-item {
+    display:flex; gap:10px; background:#16213e; border-radius:10px; padding:8px; margin-bottom:8px; align-items:center;
+  }
+  .gallery-thumb { width:64px; height:64px; border-radius:8px; object-fit:cover; background:#000; flex-shrink:0; }
+  .gallery-thumb.video-thumb { display:flex; align-items:center; justify-content:center; font-size:1.6em; }
+  .gallery-meta { flex:1; min-width:0; }
+  .gallery-addr { color:#f72585; font-weight:bold; font-size:0.95em; }
+  .gallery-sub { color:#9be8ff; font-size:0.72em; }
+  .gallery-date { color:#888; font-size:0.7em; }
+  .gallery-del { background:rgba(247,37,133,0.2); border:none; color:#f72585; border-radius:8px; padding:8px 10px; font-size:0.9em; }
+
+  /* ---------- camera / preview ---------- */
+  .camera-section { display:none; position:fixed; inset:0; background:#000; z-index:1000; flex-direction:column; }
+  .camera-section.active { display:flex; }
+  #video { flex:1; width:100%; object-fit:cover; }
+  .live-overlay {
+    position:absolute; bottom:130px; left:10px; right:10px; background:rgba(0,0,0,0.6);
+    color:#4cc9f0; padding:10px; border-radius:10px; font-size:0.95em; text-align:center; font-weight:bold;
+    pointer-events:none; white-space:pre-line;
+  }
+  .camera-controls { position:absolute; bottom:30px; left:0; right:0; display:flex; justify-content:center; align-items:center; gap:30px; }
+  .capture-btn { width:70px; height:70px; border-radius:50%; background:white; border:4px solid #4cc9f0; cursor:pointer; }
+  .capture-btn.recording { background:#f72585; border-color:#ff9800; animation:recpulse 1s infinite; }
+  @keyframes recpulse { 0%,100%{box-shadow:0 0 0 0 rgba(247,37,133,.6);} 50%{box-shadow:0 0 0 12px rgba(247,37,133,0);} }
+  .capture-btn:active { transform:scale(0.9); }
+  .rec-time { position:absolute; top:55px; left:20px; background:rgba(247,37,133,.85); color:white; padding:6px 14px; border-radius:15px; font-weight:bold; display:none; }
+  .rec-time.active { display:block; }
+  .close-camera { position:absolute; top:50px; right:20px; background:rgba(0,0,0,.5); color:white; border:none; padding:10px 20px; border-radius:20px; font-size:1em; cursor:pointer; }
+  .preview-section { display:none; position:fixed; inset:0; background:#000; z-index:1001; flex-direction:column; }
+  .preview-section.active { display:flex; }
+  #preview-canvas { flex:1; width:100%; object-fit:contain; background:#000; }
+  #preview-video { flex:1; width:100%; object-fit:contain; background:#000; display:none; }
+  .preview-controls { position:absolute; bottom:30px; left:0; right:0; display:flex; justify-content:center; gap:20px; }
+  .preview-btn { padding:15px 30px; border:none; border-radius:25px; font-size:1em; font-weight:bold; cursor:pointer; }
+  .preview-btn.save { background:#00c853; color:white; }
+  .preview-btn.cancel { background:#f72585; color:white; }
+
+  @keyframes pulse { 0%,100%{opacity:1;} 50%{opacity:.5;} }
+  .loading .address-display { animation:pulse 1.5s infinite; }
+</style>
+</head>
+<body>
+
+<!-- ================= HOME PAGE ================= -->
+<div id="page-home">
+  <div class="topbar">
+    <h1>🛣️ Tierekisteriosoite <span class="auto-dot">● AUTO</span></h1>
+    <button class="top-btn" onclick="showGallery()">🖼️ Galleria</button>
+  </div>
+
+  <div id="status" class="status loading">Odotetaan GPS-sijaintia...</div>
+
+  <div class="info-box" id="info-box">
+    <div class="primary-type-label" id="primary-type"></div>
+    <div class="address-display" id="address">-</div>
+    <div class="road-name" id="road-name"></div>
+    <div class="sub-info" id="paallyste-info"></div>
+    <div class="sub-info dim" id="kaista-info"></div>
+    <div class="secondary-addresses" id="secondary-addresses"></div>
+    <div class="extra-info">
+      <div class="extra-item" id="direction-box">
+        <div class="extra-label">Suunta</div>
+        <div class="extra-value" id="direction">-</div>
+      </div>
+      <div class="extra-item">
+        <div class="extra-label">GPS-tarkkuus</div>
+        <div class="extra-value" id="accuracy">-</div>
+      </div>
+      <div class="extra-item">
+        <div class="extra-label">Etäisyys tiehen</div>
+        <div class="extra-value" id="road-dist">-</div>
+      </div>
+    </div>
+    <div class="coords" id="coords">-</div>
+  </div>
+
+  <div class="map-wrap">
+    <div id="map"></div>
+    <button class="map-expand-btn" onclick="toggleMapExpand()" id="map-expand-btn">⤢</button>
+  </div>
+
+  <div class="radius-bar">
+    <label>Hakusäde</label>
+    <input type="range" id="radius-slider" min="10" max="100" step="10" value="30" oninput="onRadiusChange(this.value)">
+    <span class="radius-val" id="radius-val">30 m</span>
+  </div>
+
+  <div class="filter-buttons">
+    <button class="filter-btn active" id="filter-tie" onclick="toggleFilter('tie')">🛣️ Tie</button>
+    <button class="filter-btn" id="filter-ramppi" onclick="toggleFilter('ramppi')">🔀 Ramppi</button>
+    <button class="filter-btn" id="filter-kevyt" onclick="toggleFilter('kevyt')">🚴 Kevyt</button>
+  </div>
+
+  <div class="btn-group">
+    <button class="btn btn-primary" onclick="manualRefresh()">🔄 Päivitä</button>
+    <button class="btn btn-secondary" id="camera-btn" onclick="openCamera(false)" disabled>📷 Kuva</button>
+    <button class="btn btn-video" id="video-btn" onclick="openCamera(true)" disabled>🎥 Video</button>
+  </div>
+</div>
+
+<!-- ================= GALLERY PAGE ================= -->
+<div id="page-gallery">
+  <div class="gallery-topbar">
+    <button class="top-btn" onclick="showHome()">← Takaisin</button>
+    <h1>🖼️ Kuvat &amp; videot</h1>
+  </div>
+  <div class="gallery-map-wrap"><div id="gallery-map"></div></div>
+  <div class="sort-bar">
+    <label>Järjestys</label>
+    <select id="sort-select" onchange="renderGallery()">
+      <option value="date-desc">Uusin ensin</option>
+      <option value="date-asc">Vanhin ensin</option>
+      <option value="tie-asc">Tie ↑</option>
+      <option value="tie-desc">Tie ↓</option>
+      <option value="etaisyys-asc">Etäisyys ↑</option>
+      <option value="type">Väylätyyppi</option>
+    </select>
+  </div>
+  <div class="gallery-list" id="gallery-list"></div>
+</div>
+
+<!-- ================= CAMERA ================= -->
+<div class="camera-section" id="camera-section">
+  <button class="close-camera" onclick="closeCamera()">✕ Sulje</button>
+  <div class="rec-time" id="rec-time">● 0:00</div>
+  <video id="video" autoplay playsinline muted></video>
+  <div class="live-overlay" id="live-overlay"></div>
+  <div class="camera-controls"><button class="capture-btn" id="capture-btn" onclick="captureAction()"></button></div>
+</div>
+
+<!-- ================= PREVIEW ================= -->
+<div class="preview-section" id="preview-section">
+  <canvas id="preview-canvas"></canvas>
+  <video id="preview-video" controls playsinline></video>
+  <div class="preview-controls">
+    <button class="preview-btn cancel" onclick="cancelPreview()">❌ Hylkää</button>
+    <button class="preview-btn save" onclick="saveMedia()">💾 Tallenna</button>
+  </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/proj4js/2.9.0/proj4.min.js"></script>
+<script>
+/* ============================================================
+   STATE
+   ============================================================ */
+let map, marker, accuracyCircle;
+let galleryMap, galleryMarkersLayer;
+let currentPosition = null, previousPosition = null;
+let currentAccuracy = null, currentHeading = null;
+let currentAddresses = {};
+let primaryAddress = null;
+let nearestInfo = null;
+let videoStream = null;
+let watchId = null;
+let fetchBusy = false;
+let lastFetchPos = null;
+let mapExpanded = false;
+
+let isVideoMode = false;
+let mediaRecorder = null;
+let recordedChunks = [];
+let recording = false;
+let recCanvas = null, recCtx = null, recAnimFrame = null;
+let recStartTime = null, recTimerInterval = null;
+let recordedBlob = null, recordedMime = 'video/mp4';
+let photoBlob = null;
+
+let searchRadius = parseInt(localStorage.getItem('searchRadius') || '30');
+const NEAREST_RADIUS = 1000;
+
+let activeFilters = JSON.parse(localStorage.getItem('activeFilters') || '{"tie":true,"ramppi":false,"kevyt":false}');
+
+// Correct vaylan_luonne codes (Väylävirasto liite 2 kohta 4)
+const VAYLAN_LUONNE = {
+  tie:    [1, 11, 12, 13, 14],   // maantiet: valtatie/kantatie/seututie/yhdystie
+  ramppi: [21, 22, 23, 39],      // kiertoliittymät, rampit, palvelualueet, huoltoaukot
+  kevyt:  [7, 61, 62]            // kevarit, talvitiet, polut
+};
+const TYPE_NAMES = { tie:'Tie', ramppi:'Ramppi', kevyt:'Kevyt liikenne' };
+const TYPE_ICONS = { tie:'🛣️', ramppi:'🔀', kevyt:'🚴' };
+
+let paallysteCache = {}; // key: tie -> {text, date}
+let kaistaCache = {};    // key: rounded coords -> list
+let lastRoadKey = null;
+
+/* ============================================================
+   INDEXEDDB (gallery storage)
+   ============================================================ */
+let db = null;
+function openDB() {
+  return new Promise((resolve) => {
+    const req = indexedDB.open('tierekisteriDB', 1);
+    req.onupgradeneeded = () => {
+      const d = req.result;
+      if (!d.objectStoreNames.contains('media')) {
+        d.createObjectStore('media', { keyPath: 'id', autoIncrement: true });
+      }
+    };
+    req.onsuccess = () => { db = req.result; resolve(db); };
+    req.onerror = () => resolve(null);
+  });
+}
+function addMediaRecord(record) {
+  return new Promise((resolve) => {
+    if (!db) return resolve(false);
+    const tx = db.transaction('media', 'readwrite');
+    tx.objectStore('media').add(record);
+    tx.oncomplete = () => resolve(true);
+    tx.onerror = () => resolve(false);
+  });
+}
+function getAllMedia() {
+  return new Promise((resolve) => {
+    if (!db) return resolve([]);
+    const tx = db.transaction('media', 'readonly');
+    const req = tx.objectStore('media').getAll();
+    req.onsuccess = () => resolve(req.result || []);
+    req.onerror = () => resolve([]);
+  });
+}
+function deleteMediaRecord(id) {
+  return new Promise((resolve) => {
+    if (!db) return resolve(false);
+    const tx = db.transaction('media', 'readwrite');
+    tx.objectStore('media').delete(id);
+    tx.oncomplete = () => resolve(true);
+    tx.onerror = () => resolve(false);
+  });
+}
+
+/* ============================================================
+   COORDINATE HELPERS
+   ============================================================ */
+proj4.defs("EPSG:3067", "+proj=utm +zone=35 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs");
+
+function wgs84ToETRS(lat, lon) {
+  const r = proj4("EPSG:4326", "EPSG:3067", [lon, lat]);
+  return { x: Math.round(r[0]), y: Math.round(r[1]) };
+}
+function distMeters(lat1, lon1, lat2, lon2) {
+  const dLat = (lat2 - lat1) * 111320;
+  const dLon = (lon2 - lon1) * 111320 * Math.cos(lat1 * Math.PI / 180);
+  return Math.sqrt(dLat * dLat + dLon * dLon);
+}
+function bboxAround(lat, lon, radiusMeters) {
+  const dLat = radiusMeters / 111320;
+  const dLon = radiusMeters / (111320 * Math.cos(lat * Math.PI / 180));
+  return `${lon - dLon},${lat - dLat},${lon + dLon},${lat + dLat}`;
+}
+function calculateHeading(pLat, pLon, cLat, cLon) {
+  const dLon = (cLon - pLon) * Math.PI / 180;
+  const lat1 = pLat * Math.PI / 180, lat2 = cLat * Math.PI / 180;
+  const x = Math.sin(dLon) * Math.cos(lat2);
+  const y = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLon);
+  return (Math.atan2(x, y) * 180 / Math.PI + 360) % 360;
+}
+
+/* ============================================================
+   MAP
+   ============================================================ */
+function initMap() {
+  map = L.map('map', { zoomControl: true }).setView([65.0, 25.5], 5);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution:'© OpenStreetMap' }).addTo(map);
+}
+function toggleMapExpand() {
+  mapExpanded = !mapExpanded;
+  document.getElementById('info-box').classList.toggle('collapsed', mapExpanded);
+  document.getElementById('map-expand-btn').textContent = mapExpanded ? '⤡' : '⤢';
+  setTimeout(() => map.invalidateSize(), 260);
+}
+
+/* ============================================================
+   STATUS / FILTER UI
+   ============================================================ */
+function setStatus(message, type='loading') {
+  const s = document.getElementById('status');
+  s.textContent = message;
+  s.className = 'status ' + type;
+}
+function toggleFilter(type) {
+  activeFilters[type] = !activeFilters[type];
+  if (!activeFilters.tie && !activeFilters.ramppi && !activeFilters.kevyt) activeFilters[type] = true;
+  for (const t of ['tie','ramppi','kevyt']) document.getElementById('filter-'+t).classList.toggle('active', activeFilters[t]);
+  localStorage.setItem('activeFilters', JSON.stringify(activeFilters));
+  if (currentPosition) fetchAndDisplay(true);
+}
+function activeTypes() { return ['tie','ramppi','kevyt'].filter(t => activeFilters[t]); }
+
+function onRadiusChange(val) {
+  searchRadius = parseInt(val);
+  document.getElementById('radius-val').textContent = searchRadius + ' m';
+  localStorage.setItem('searchRadius', searchRadius);
+  if (currentPosition) fetchAndDisplay(true);
+}
+
+/* ============================================================
+   ROAD ADDRESS LOOKUP (viitekehysmuunnin)
+   ============================================================ */
+function parseFeature(data) {
+  if (data && data.type === 'FeatureCollection' && data.features && data.features.length > 0) {
+    const props = data.features[0].properties;
+    if (props.virheet) return null;
+    if (props.tie !== undefined && props.osa !== undefined && props.etaisyys !== undefined) {
+      return {
+        tie: props.tie, tieosa: props.osa, etaisyys: props.etaisyys,
+        tienimi: props.tienimi || null, distance: props.valimatka || 0,
+        vaylanLuonne: props.vaylan_luonne, yhteinen_kasvusuunta: props.yhteinen_kasvusuunta
+      };
+    }
+  }
+  return null;
+}
+async function fetchType(etrs, type, radius) {
+  const luonne = VAYLAN_LUONNE[type].join(',');
+  const url = `https://avoinapi.vaylapilvi.fi/viitekehysmuunnin/muunna?x=${etrs.x}&y=${etrs.y}&sade=${radius}&palautusarvot=1,2,3,4,5,6&vaylan_luonne=${luonne}`;
+  try {
+    const resp = await fetch(url);
+    if (!resp.ok) return null;
+    return parseFeature(await resp.json());
+  } catch (e) { return null; }
+}
+async function fetchNearestAny(etrs) {
+  const results = await Promise.all(activeTypes().map(async t => {
+    const r = await fetchType(etrs, t, NEAREST_RADIUS);
+    return r ? { type: t, addr: r } : null;
+  }));
+  const found = results.filter(r => r !== null);
+  if (found.length === 0) return null;
+  found.sort((a, b) => a.addr.distance - b.addr.distance);
+  return found[0];
+}
+
+/* ============================================================
+   PÄÄLLYSTYS + KAISTA LOOKUP (OGC Features API)
+   ============================================================ */
+const PAALLYSTE_COLLECTIONS = [
+  'hanketiedot:paallystystyot_tiet_nykyinen_vuosi',
+  'hanketiedot:paallystystyot_tiet_2025',
+  'hanketiedot:paallystystyot_tiet_2024'
+];
+
+function parseFiDate(s) {
+  // "05.06.2025" -> Date
+  if (!s) return null;
+  const p = s.split('.');
+  if (p.length !== 3) return null;
+  return new Date(parseInt(p[2]), parseInt(p[1]) - 1, parseInt(p[0]));
+}
+
+async function fetchPaallysteInfo(lat, lon, tieNumero, etaisyysVal) {
+  const bbox = bboxAround(lat, lon, 120);
+  const results = await Promise.all(PAALLYSTE_COLLECTIONS.map(async col => {
+    try {
+      const url = `https://avoinapi.vaylapilvi.fi/vaylatiedot/ogc/features/v1/collections/${col}/items?bbox=${bbox}&f=json&limit=15`;
+      const resp = await fetch(url);
+      if (!resp.ok) return [];
+      const data = await resp.json();
+      return (data.features || []).map(f => f.properties);
+    } catch (e) { return []; }
+  }));
+  const all = results.flat().filter(p => p.tienumero === tieNumero);
+  if (all.length === 0) return null;
+  // pick the record with the most recent completion date
+  let best = null, bestDate = null;
+  for (const p of all) {
+    const d = parseFiDate(p.kohde_valmis || p.paallystys_valmis);
+    if (!bestDate || (d && d > bestDate)) { bestDate = d; best = p; }
+  }
+  if (!best) return null;
+  const dateStr = best.kohde_valmis || best.paallystys_valmis || '';
+  const year = dateStr ? dateStr.split('.')[2] : '';
+  return { date: dateStr, year, nimi: best.nimi || '' };
+}
+
+async function fetchKaistaInfo(lat, lon) {
+  const bbox = bboxAround(lat, lon, 40);
+  try {
+    const url = `https://avoinapi.vaylapilvi.fi/vaylatiedot/ogc/features/v1/collections/tiestotiedot:kaistat/items?bbox=${bbox}&f=json&limit=20`;
+    const resp = await fetch(url);
+    if (!resp.ok) return [];
+    const data = await resp.json();
+    const types = new Set();
+    for (const f of (data.features || [])) {
+      if (f.properties && f.properties.tyyppi) types.add(f.properties.tyyppi);
+    }
+    return Array.from(types);
+  } catch (e) { return []; }
+}
+
+async function updateRoadDetails() {
+  const paEl = document.getElementById('paallyste-info');
+  const kaEl = document.getElementById('kaista-info');
+  if (!primaryAddress || !currentPosition) { paEl.textContent = ''; kaEl.textContent = ''; return; }
+
+  const roadKey = primaryAddress.tie + '/' + primaryAddress.tieosa;
+  if (roadKey === lastRoadKey) return; // avoid refetch on every tick
+  lastRoadKey = roadKey;
+
+  paEl.textContent = 'Haetaan päällystystietoa...';
+  kaEl.textContent = '';
+
+  const [pa, ka] = await Promise.all([
+    paallysteCache[primaryAddress.tie] !== undefined
+      ? Promise.resolve(paallysteCache[primaryAddress.tie])
+      : fetchPaallysteInfo(currentPosition.lat, currentPosition.lon, primaryAddress.tie, primaryAddress.etaisyys),
+    fetchKaistaInfo(currentPosition.lat, currentPosition.lon)
+  ]);
+  paallysteCache[primaryAddress.tie] = pa;
+
+  paEl.textContent = pa ? `🛠️ Viimeisin päällystys: ${pa.date} (${pa.year})` : '🛠️ Päällystystietoa ei löytynyt lähialueelta';
+  kaEl.textContent = ka.length > 0 ? `🚗 Kaistat: ${ka.join(', ')}` : '';
+}
+
+/* ============================================================
+   DISPLAY
+   ============================================================ */
+function fmtAddr(a) { return `${a.tie} / ${a.tieosa} / ${a.etaisyys}`; }
+
+async function fetchAndDisplay(force) {
+  if (!currentPosition || fetchBusy) return;
+  if (!force && lastFetchPos) {
+    const d = distMeters(lastFetchPos.lat, lastFetchPos.lon, currentPosition.lat, currentPosition.lon);
+    if (d < 5) return;
+  }
+  fetchBusy = true;
+  lastFetchPos = { ...currentPosition };
+  const etrs = wgs84ToETRS(currentPosition.lat, currentPosition.lon);
+
+  const types = activeTypes();
+  const results = await Promise.all(types.map(t => fetchType(etrs, t, searchRadius)));
+
+  currentAddresses = {};
+  types.forEach((t, i) => { if (results[i]) currentAddresses[t] = results[i]; });
+
+  const foundTypes = Object.keys(currentAddresses);
+  if (foundTypes.length === 0) {
+    nearestInfo = await fetchNearestAny(etrs);
+    primaryAddress = null;
+  } else {
+    nearestInfo = null;
+    foundTypes.sort((a, b) => currentAddresses[a].distance - currentAddresses[b].distance);
+    primaryAddress = { type: foundTypes[0], ...currentAddresses[foundTypes[0]] };
+  }
+
+  updateDisplay();
+  if (primaryAddress) updateRoadDetails();
+  fetchBusy = false;
+}
+
+function updateDisplay() {
+  const infoBox = document.getElementById('info-box');
+  infoBox.classList.remove('loading');
+  document.getElementById('accuracy').textContent = currentAccuracy !== null ? `±${Math.round(currentAccuracy)} m` : '-';
+
+  const secDiv = document.getElementById('secondary-addresses');
+  secDiv.innerHTML = '';
+
+  if (primaryAddress) {
+    document.getElementById('primary-type').textContent = TYPE_ICONS[primaryAddress.type] + ' ' + TYPE_NAMES[primaryAddress.type];
+    document.getElementById('address').textContent = fmtAddr(primaryAddress);
+    document.getElementById('road-name').textContent = primaryAddress.tienimi || '';
+    document.getElementById('road-dist').textContent = primaryAddress.distance > 0 ? Math.round(primaryAddress.distance) + ' m' : 'Tiellä';
+
+    const dirBox = document.getElementById('direction-box');
+    const dirEl = document.getElementById('direction');
+    dirBox.classList.remove('direction-forward', 'direction-backward');
+    if (currentHeading !== null && primaryAddress.yhteinen_kasvusuunta !== undefined) {
+      const fwd = primaryAddress.yhteinen_kasvusuunta;
+      dirEl.textContent = fwd ? '→ Kasvuun' : '← Vastaan';
+      dirBox.classList.add(fwd ? 'direction-forward' : 'direction-backward');
+    } else {
+      dirEl.textContent = 'Liiku...';
+    }
+
+    for (const t of Object.keys(currentAddresses)) {
+      if (t === primaryAddress.type) continue;
+      const a = currentAddresses[t];
+      const row = document.createElement('div');
+      row.className = 'secondary-row';
+      row.innerHTML = `<span class="stype">${TYPE_ICONS[t]} ${TYPE_NAMES[t]}</span><span class="saddr">${fmtAddr(a)}</span><span class="sdist">${Math.round(a.distance)} m</span>`;
+      secDiv.appendChild(row);
+    }
+
+    document.getElementById('camera-btn').disabled = false;
+    document.getElementById('video-btn').disabled = false;
+    setStatus(`Tierekisteriosoite löydetty (${searchRadius} m säteellä)`, 'success');
+  } else {
+    document.getElementById('primary-type').textContent = '';
+    document.getElementById('address').textContent = `Ei osoitetta ≤ ${searchRadius} m`;
+    document.getElementById('road-name').textContent = '';
+    document.getElementById('paallyste-info').textContent = '';
+    document.getElementById('kaista-info').textContent = '';
+    document.getElementById('direction').textContent = '-';
+    document.getElementById('direction-box').classList.remove('direction-forward', 'direction-backward');
+    document.getElementById('camera-btn').disabled = true;
+    document.getElementById('video-btn').disabled = true;
+    lastRoadKey = null;
+
+    if (nearestInfo) {
+      const a = nearestInfo.addr;
+      document.getElementById('road-dist').textContent = Math.round(a.distance) + ' m';
+      const row = document.createElement('div');
+      row.className = 'secondary-row';
+      row.innerHTML = `<span class="stype">Lähin: ${TYPE_ICONS[nearestInfo.type]} ${TYPE_NAMES[nearestInfo.type]}</span><span class="saddr">${fmtAddr(a)}</span><span class="sdist">${Math.round(a.distance)} m</span>`;
+      secDiv.appendChild(row);
+      setStatus(`Ei tierekisteriosoitetta ${searchRadius} m säteellä – lähin ${Math.round(a.distance)} m päässä`, 'error');
+    } else {
+      document.getElementById('road-dist').textContent = '-';
+      setStatus(`Ei tierekisteriosoitetta ${searchRadius} m säteellä eikä 1 km lähialueella`, 'error');
+    }
+  }
+}
+
+/* ============================================================
+   GEOLOCATION
+   ============================================================ */
+function handlePosition(position) {
+  const lat = position.coords.latitude;
+  const lon = position.coords.longitude;
+  currentAccuracy = position.coords.accuracy;
+
+  if (position.coords.heading !== null && !isNaN(position.coords.heading) && position.coords.speed > 0.5) {
+    currentHeading = position.coords.heading;
+  } else if (previousPosition) {
+    const d = distMeters(previousPosition.lat, previousPosition.lon, lat, lon);
+    if (d > 5) currentHeading = calculateHeading(previousPosition.lat, previousPosition.lon, lat, lon);
+  }
+
+  previousPosition = currentPosition ? { ...currentPosition } : { lat, lon };
+  currentPosition = { lat, lon };
+
+  document.getElementById('coords').textContent = `📍 ${lat.toFixed(6)}, ${lon.toFixed(6)}`;
+
+  if (map) {
+    map.setView([lat, lon], Math.max(map.getZoom(), 15));
+    if (marker) marker.setLatLng([lat, lon]); else marker = L.marker([lat, lon]).addTo(map);
+    if (accuracyCircle) map.removeLayer(accuracyCircle);
+    accuracyCircle = L.circle([lat, lon], { radius: currentAccuracy, color:'#4cc9f0', fillColor:'#4cc9f0', fillOpacity:0.1, weight:1 }).addTo(map);
+  }
+  fetchAndDisplay(false);
+}
+function handleError(error) {
+  let message = 'Sijaintia ei saatu';
+  switch (error.code) {
+    case error.PERMISSION_DENIED: message = 'Sijainnin käyttö estetty. Salli sijainti asetuksista.'; break;
+    case error.POSITION_UNAVAILABLE: message = 'Sijaintitietoa ei saatavilla'; break;
+    case error.TIMEOUT: message = 'Sijainnin haku aikakatkaistiin'; break;
+  }
+  setStatus(message, 'error');
+}
+function startWatching() {
+  if (watchId !== null) navigator.geolocation.clearWatch(watchId);
+  watchId = navigator.geolocation.watchPosition(handlePosition, handleError, { enableHighAccuracy:true, timeout:15000, maximumAge:2000 });
+}
+function manualRefresh() {
+  setStatus('Haetaan sijaintia...', 'loading');
+  document.getElementById('info-box').classList.add('loading');
+  navigator.geolocation.getCurrentPosition(p => { handlePosition(p); fetchAndDisplay(true); }, handleError, { enableHighAccuracy:true, timeout:15000, maximumAge:0 });
+}
+
+/* ============================================================
+   OVERLAY TEXT BUILDERS (photo/video)
+   ============================================================ */
+function buildOverlayLines() {
+  const lines = [];
+  if (primaryAddress) {
+    lines.push(`${TYPE_NAMES[primaryAddress.type]}: ${fmtAddr(primaryAddress)}`);
+    for (const t of Object.keys(currentAddresses)) {
+      if (t === primaryAddress.type) continue;
+      lines.push(`${TYPE_NAMES[t]}: ${fmtAddr(currentAddresses[t])}`);
+    }
+  } else {
+    lines.push('Ei tierekisteriosoitetta');
+  }
+  return lines;
+}
+function buildMetaLine() {
+  const dateText = new Date().toLocaleString('fi-FI');
+  const coordsText = currentPosition ? `${currentPosition.lat.toFixed(6)}, ${currentPosition.lon.toFixed(6)}` : '';
+  const accText = currentAccuracy ? `±${Math.round(currentAccuracy)}m` : '';
+  return `${dateText} | ${coordsText} | GPS ${accText}`;
+}
+function drawOverlay(ctx, w, h) {
+  const lines = buildOverlayLines();
+  const meta = buildMetaLine();
+  const mainSize = Math.max(20, Math.round(w / 30));
+  const subSize = Math.max(15, Math.round(w / 42));
+  const metaSize = Math.max(12, Math.round(w / 55));
+  const lineGap = 8;
+  const boxHeight = mainSize + (lines.length - 1) * (subSize + lineGap) + metaSize + 45;
+  ctx.fillStyle = 'rgba(0,0,0,0.65)';
+  ctx.fillRect(0, h - boxHeight, w, boxHeight);
+  ctx.textAlign = 'center';
+  let y = h - boxHeight + mainSize + 10;
+  ctx.fillStyle = '#4cc9f0';
+  ctx.font = 'bold ' + mainSize + 'px -apple-system, sans-serif';
+  ctx.fillText(lines[0], w / 2, y);
+  ctx.font = 'bold ' + subSize + 'px -apple-system, sans-serif';
+  ctx.fillStyle = '#9be8ff';
+  for (let i = 1; i < lines.length; i++) { y += subSize + lineGap; ctx.fillText(lines[i], w / 2, y); }
+  ctx.fillStyle = '#ccc';
+  ctx.font = metaSize + 'px -apple-system, sans-serif';
+  ctx.fillText(meta, w / 2, h - 12);
+}
+function updateLiveOverlay() {
+  document.getElementById('live-overlay').textContent = buildOverlayLines().join('\n') + '\n' + buildMetaLine();
+}
+
+/* ============================================================
+   CAMERA / VIDEO
+   ============================================================ */
+async function openCamera(videoMode) {
+  if (!primaryAddress) { alert('Ei tierekisteriosoitetta valitulla säteellä!'); return; }
+  isVideoMode = videoMode;
+  try {
+    videoStream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode:'environment', width:{ideal:1920}, height:{ideal:1080} },
+      audio: videoMode
+    });
+    const video = document.getElementById('video');
+    video.srcObject = videoStream;
+    document.getElementById('camera-section').classList.add('active');
+    document.getElementById('capture-btn').classList.remove('recording');
+    document.getElementById('rec-time').classList.remove('active');
+    updateLiveOverlay();
+    if (window.overlayInterval) clearInterval(window.overlayInterval);
+    window.overlayInterval = setInterval(updateLiveOverlay, 1000);
+  } catch (error) { alert('Kameraa ei voitu avata: ' + error.message); }
+}
+function closeCamera() {
+  if (recording) stopRecording(false);
+  if (window.overlayInterval) { clearInterval(window.overlayInterval); window.overlayInterval = null; }
+  if (videoStream) { videoStream.getTracks().forEach(t => t.stop()); videoStream = null; }
+  document.getElementById('camera-section').classList.remove('active');
+}
+function captureAction() {
+  if (isVideoMode) { if (recording) stopRecording(true); else startRecording(); }
+  else capturePhoto();
+}
+function capturePhoto() {
+  const video = document.getElementById('video');
+  const canvas = document.getElementById('preview-canvas');
+  const ctx = canvas.getContext('2d');
+  canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+  ctx.drawImage(video, 0, 0);
+  drawOverlay(ctx, canvas.width, canvas.height);
+  canvas.style.display = 'block';
+  document.getElementById('preview-video').style.display = 'none';
+  recordedBlob = null;
+  canvas.toBlob(b => { photoBlob = b; }, 'image/jpeg', 0.92);
+  document.getElementById('preview-section').classList.add('active');
+  closeCamera();
+}
+function pickMimeType() {
+  const candidates = ['video/mp4', 'video/webm;codecs=h264', 'video/webm'];
+  for (const c of candidates) if (window.MediaRecorder && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(c)) return c;
+  return '';
+}
+function startRecording() {
+  if (!window.MediaRecorder) { alert('Selain ei tue videon tallennusta. Päivitä iOS uusimpaan versioon.'); return; }
+  const video = document.getElementById('video');
+  recCanvas = document.createElement('canvas');
+  recCanvas.width = video.videoWidth || 1280; recCanvas.height = video.videoHeight || 720;
+  recCtx = recCanvas.getContext('2d');
+  const canvasStream = recCanvas.captureStream(30);
+  if (videoStream) videoStream.getAudioTracks().forEach(t => canvasStream.addTrack(t));
+  recordedMime = pickMimeType();
+  try { mediaRecorder = new MediaRecorder(canvasStream, recordedMime ? { mimeType: recordedMime } : undefined); }
+  catch (e) { alert('Videotallennus epäonnistui: ' + e.message); return; }
+  recordedChunks = [];
+  mediaRecorder.ondataavailable = e => { if (e.data && e.data.size > 0) recordedChunks.push(e.data); };
+  mediaRecorder.onstop = () => { if (recordedChunks.length > 0) { recordedBlob = new Blob(recordedChunks, { type: recordedMime || 'video/webm' }); showVideoPreview(); } };
+  mediaRecorder.start(500);
+  recording = true;
+  function drawFrame() {
+    if (!recording) return;
+    recCtx.drawImage(video, 0, 0, recCanvas.width, recCanvas.height);
+    drawOverlay(recCtx, recCanvas.width, recCanvas.height);
+    recAnimFrame = requestAnimationFrame(drawFrame);
+  }
+  drawFrame();
+  document.getElementById('capture-btn').classList.add('recording');
+  const recTimeEl = document.getElementById('rec-time');
+  recTimeEl.classList.add('active');
+  recStartTime = Date.now();
+  recTimerInterval = setInterval(() => {
+    const s = Math.floor((Date.now() - recStartTime) / 1000);
+    recTimeEl.textContent = `● ${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`;
+  }, 500);
+}
+function stopRecording(showPreview) {
+  recording = false;
+  if (recAnimFrame) cancelAnimationFrame(recAnimFrame);
+  if (recTimerInterval) clearInterval(recTimerInterval);
+  document.getElementById('capture-btn').classList.remove('recording');
+  document.getElementById('rec-time').classList.remove('active');
+  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+    if (!showPreview) mediaRecorder.onstop = null;
+    mediaRecorder.stop();
+  }
+}
+function showVideoPreview() {
+  const pv = document.getElementById('preview-video');
+  document.getElementById('preview-canvas').style.display = 'none';
+  pv.style.display = 'block';
+  pv.src = URL.createObjectURL(recordedBlob);
+  photoBlob = null;
+  document.getElementById('preview-section').classList.add('active');
+  closeCamera();
+}
+function cancelPreview() {
+  document.getElementById('preview-section').classList.remove('active');
+  recordedBlob = null; photoBlob = null;
+}
+
+async function saveMedia() {
+  const isVideo = recordedBlob !== null;
+  const blob = isVideo ? recordedBlob : photoBlob;
+  if (!blob) { alert('Ei tallennettavaa!'); return; }
+
+  const stamp = Date.now();
+  const addrPart = primaryAddress ? `${primaryAddress.tie}_${primaryAddress.tieosa}_${primaryAddress.etaisyys}` : 'x';
+  const ext = isVideo ? (recordedMime.includes('mp4') ? 'mp4' : 'webm') : 'jpg';
+  const filename = `tierekisteri_${addrPart}_${stamp}.${ext}`;
+  const mime = isVideo ? (recordedMime || 'video/webm') : 'image/jpeg';
+
+  // Save into app gallery (IndexedDB)
+  await addMediaRecord({
+    type: isVideo ? 'video' : 'photo',
+    blob, mime, filename,
+    tie: primaryAddress ? primaryAddress.tie : null,
+    tieosa: primaryAddress ? primaryAddress.tieosa : null,
+    etaisyys: primaryAddress ? primaryAddress.etaisyys : null,
+    tienimi: primaryAddress ? primaryAddress.tienimi : null,
+    vaylaType: primaryAddress ? primaryAddress.type : null,
+    lat: currentPosition ? currentPosition.lat : null,
+    lon: currentPosition ? currentPosition.lon : null,
+    timestamp: stamp
+  });
+
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(blob);
+  link.download = filename;
+
+  if (navigator.share && navigator.canShare) {
+    const file = new File([blob], filename, { type: mime });
+    if (navigator.canShare({ files: [file] })) {
+      navigator.share({ files: [file], title: 'Tierekisteriosoite' })
+        .then(() => setStatus(isVideo ? 'Video tallennettu!' : 'Kuva tallennettu!', 'success'))
+        .catch(() => { link.click(); setStatus('Ladattu!', 'success'); });
+    } else { link.click(); setStatus('Ladattu!', 'success'); }
+  } else { link.click(); setStatus('Ladattu!', 'success'); }
+
+  document.getElementById('preview-section').classList.remove('active');
+  recordedBlob = null; photoBlob = null;
+}
+
+/* ============================================================
+   GALLERY PAGE
+   ============================================================ */
+function showGallery() {
+  document.body.classList.add('gallery-active');
+  if (!galleryMap) {
+    galleryMap = L.map('gallery-map').setView([65.0, 25.5], 5);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution:'© OpenStreetMap' }).addTo(galleryMap);
+    galleryMarkersLayer = L.layerGroup().addTo(galleryMap);
+  }
+  setTimeout(() => galleryMap.invalidateSize(), 100);
+  renderGallery();
+}
+function showHome() {
+  document.body.classList.remove('gallery-active');
+  setTimeout(() => map && map.invalidateSize(), 100);
+}
+
+async function renderGallery() {
+  const items = await getAllMedia();
+  const sortMode = document.getElementById('sort-select').value;
+
+  items.sort((a, b) => {
+    switch (sortMode) {
+      case 'date-asc': return a.timestamp - b.timestamp;
+      case 'date-desc': return b.timestamp - a.timestamp;
+      case 'tie-asc': return (a.tie || 0) - (b.tie || 0);
+      case 'tie-desc': return (b.tie || 0) - (a.tie || 0);
+      case 'etaisyys-asc': return (a.etaisyys || 0) - (b.etaisyys || 0);
+      case 'type': return (a.vaylaType || '').localeCompare(b.vaylaType || '');
+      default: return b.timestamp - a.timestamp;
+    }
+  });
+
+  const list = document.getElementById('gallery-list');
+  list.innerHTML = '';
+  galleryMarkersLayer.clearLayers();
+
+  if (items.length === 0) {
+    list.innerHTML = '<div class="gallery-empty">Ei tallennettuja kuvia tai videoita.<br>Ota kuva tai video etusivulta.</div>';
+    return;
+  }
+
+  const bounds = [];
+  for (const item of items) {
+    const url = URL.createObjectURL(item.blob);
+    const div = document.createElement('div');
+    div.className = 'gallery-item';
+
+    const dateStr = new Date(item.timestamp).toLocaleString('fi-FI');
+    const typeName = item.vaylaType ? TYPE_NAMES[item.vaylaType] : '';
+
+    let thumbHtml;
+    if (item.type === 'photo') {
+      thumbHtml = `<img class="gallery-thumb" src="${url}">`;
+    } else {
+      thumbHtml = `<div class="gallery-thumb video-thumb">🎥</div>`;
+    }
+
+    div.innerHTML = `
+      ${thumbHtml}
+      <div class="gallery-meta">
+        <div class="gallery-addr">${item.tie !== null ? item.tie + ' / ' + item.tieosa + ' / ' + item.etaisyys : 'Ei osoitetta'}</div>
+        <div class="gallery-sub">${typeName}${item.tienimi ? ' · ' + item.tienimi : ''}</div>
+        <div class="gallery-date">${dateStr}</div>
+      </div>
+      <button class="gallery-del" data-id="${item.id}">🗑️</button>
+    `;
+    div.querySelector('img, .video-thumb')?.addEventListener('click', () => window.open(url, '_blank'));
+    div.querySelector('.gallery-del').addEventListener('click', async () => { await deleteMediaRecord(item.id); renderGallery(); });
+    list.appendChild(div);
+
+    if (item.lat && item.lon) {
+      const icon = item.type === 'video' ? '🎥' : '📷';
+      const m = L.marker([item.lat, item.lon]).bindPopup(`${icon} ${item.tie !== null ? item.tie+'/'+item.tieosa+'/'+item.etaisyys : ''}<br>${dateStr}`);
+      m.addTo(galleryMarkersLayer);
+      bounds.push([item.lat, item.lon]);
+    }
+  }
+  if (bounds.length > 0) galleryMap.fitBounds(bounds, { padding: [20,20], maxZoom: 14 });
+}
+
+/* ============================================================
+   INIT
+   ============================================================ */
+document.addEventListener('DOMContentLoaded', async function () {
+  await openDB();
+  document.getElementById('radius-slider').value = searchRadius;
+  document.getElementById('radius-val').textContent = searchRadius + ' m';
+  for (const t of ['tie','ramppi','kevyt']) document.getElementById('filter-'+t).classList.toggle('active', activeFilters[t]);
+
+  initMap();
+  if ('geolocation' in navigator) {
+    setStatus('Käynnistetään automaattinen seuranta...', 'loading');
+    startWatching();
+  } else {
+    setStatus('Selain ei tue paikannusta', 'error');
+  }
+});
+</script>
+</body>
+</html>
