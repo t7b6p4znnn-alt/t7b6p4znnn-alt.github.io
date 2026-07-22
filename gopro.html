@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="fi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Tierekisteri – GoPro-video</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { height:100%; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background:#1a1a2e; color:white;
+    display:flex; flex-direction:column; height:100dvh; overflow:hidden;
+  }
+  .topbar { display:flex; align-items:center; gap:8px; padding:8px 10px; background:#12122a; flex-shrink:0; }
+  .topbar h1 { font-size:1em; color:#4cc9f0; flex:1; }
+  .top-btn {
+    background:rgba(76,201,240,0.15); border:1px solid #4cc9f0; color:#4cc9f0;
+    padding:6px 10px; border-radius:8px; font-size:0.8em; font-weight:600; cursor:pointer;
+  }
+  .status { text-align:center; padding:5px; font-size:0.78em; flex-shrink:0; }
+  .status.loading { background:rgba(76,201,240,0.2); color:#4cc9f0; }
+  .status.error { background:rgba(247,37,133,0.2); color:#f72585; }
+  .status.success { background:rgba(0,200,83,0.2); color:#00c853; }
+  .file-bar { padding:8px 10px; background:#12122a; flex-shrink:0; }
+  .file-btn {
+    display:block; width:100%; text-align:center; padding:12px; border:none; border-radius:10px;
+    font-size:0.9em; font-weight:bold; color:white;
+    background:linear-gradient(135deg,#4cc9f0 0%,#4361ee 100%); cursor:pointer;
+  }
+  .video-wrap { position:relative; background:#000; flex-shrink:0; display:none; }
+  .video-wrap.active { display:block; }
+  #video { width:100%; max-height:34vh; display:block; background:#000; }
+  .addr-box {
+    background:linear-gradient(135deg,#16213e 0%,#1a1a2e 100%);
+    border-bottom:2px solid #4cc9f0; padding:6px 10px; text-align:center; flex-shrink:0;
+  }
+  .addr-main { font-size:1.3em; font-weight:bold; color:#f72585; }
+  .addr-sub { font-size:0.78em; color:#4cc9f0; }
+  .addr-meta { font-size:0.66em; color:#888; margin-top:2px; }
+  .map-wrap { position:relative; flex:1 1 auto; min-height:0; }
+  #map { position:absolute; inset:0; }
+  .btn-group {
+    display:flex; gap:6px; padding:8px 10px;
+    padding-bottom:max(8px, env(safe-area-inset-bottom));
+    background:#12122a; flex-shrink:0;
+  }
+  .btn { flex:1; padding:12px 2px; border:none; border-radius:10px; font-size:0.85em; font-weight:bold; cursor:pointer; color:white; }
+  .btn-primary { background:linear-gradient(135deg,#4cc9f0 0%,#4361ee 100%); }
+  .btn:disabled { opacity:0.5; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <button class="top-btn" onclick="location.href='index.html'">← Takaisin</button>
+  <h1>🎬 GoPro-video + tierekisteri</h1>
+</div>
+
+<div id="status" class="status loading">Valitse GoPro-video, jossa GPS on ollut päällä</div>
+
+<div class="file-bar">
+  <button class="file-btn" onclick="document.getElementById('file-input').click()">📁 Valitse video (esim. GoPro Max 2)</button>
+  <input type="file" id="file-input" accept="video/*,.mp4,.360" style="display:none">
+</div>
+
+<div class="video-wrap" id="video-wrap"><video id="video" controls playsinline></video></div>
+
+<div class="addr-box" id="addr-box" style="display:none">
+  <div class="addr-main" id="addr-main">-</div>
+  <div class="addr-sub" id="addr-sub"></div>
+  <div class="addr-meta" id="addr-meta"></div>
+</div>
+
+<div class="map-wrap"><div id="map"></div></div>
+
+<div class="btn-group">
+  <button class="btn btn-primary" id="shot-btn" onclick="takeShot()" disabled>📷 Kuvakaappaus osoitteella</button>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/proj4js/2.9.0/proj4.min.js"></script>
+<script>
+/* ============================================================
+   TIEREKISTERI GOPRO -VÄLILEHTI
+   Lukee GoPro-videon GPMF-telemetrian (GPS5/GPS9) suoraan
+   MP4-tiedostosta selaimessa ja näyttää tierekisteriosoitteen
+   toiston aikana.
+   ============================================================ */
+proj4.defs("EPSG:3067", "+proj=utm +zone=35 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs");
+const LUONNE_ALL = '1,11,12,13,14,21,22,23,39,7,61,62';
+const $ = id => document.getElementById(id);
+
+let map = L.map('map').setView([65.0, 25.5], 5);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution:'© OpenStreetMap' }).addTo(map);
+let poly = null, marker = null;
+let track = [];
+let curAddr = null, curPointRef = null;
+let addrCache = {};
+let inflight = false;
+
+function st(msg, type='loading') { const s = $('status'); s.textContent = msg; s.className = 'status ' + type; }
+function fmtTime(t) { const s = Math.floor(t); return Math.floor(s/60) + ':' + String(s%60).padStart(2,'0'); }
+
+/* ---------- MP4-laatikoiden luku (File.slice, ei lataa koko videota muistiin) ---------- */
+function str4(dv, o) { return String.fromCharCode(dv.getUint8(o), dv.getUint8(o+1), dv.getUint8(o+2), dv.getUint8(o+3)); }
+async function sliceDV(file, start, len) { return new DataView(await file.slice(start, start + len).arrayBuffer()); }
+
+async function findTopBox(file, type) {
+  let pos = 0; const size = file.size;
+  while (pos + 8 <= size) {
+    const dv = await sliceDV(file, pos, Math.min(16, size - pos));
+    let bsize = dv.getUint32(0); const name = str4(dv, 4); let hdr = 8;
+    if (bsize === 1) { bsize = Number(dv.getBigUint64(8)); hdr = 16; }
+    else if (bsize === 0) bsize = size - pos;
+    if (name === type) return { pos, size: bsize, hdr };
+    if (bsize < 8) break;
+    pos += bsize;
+  }
+  return null;
+}
+function* childBoxes(dv, start, end) {
+  let pos = start;
+  while (pos + 8 <= end) {
+    let bsize = dv.getUint32(pos); const name = str4(dv, pos + 4); let hdr = 8;
+    if (bsize === 1) { bsize = Number(dv.getBigUint64(pos + 8)); hdr = 16; }
+    if (bsize < hdr || pos + bsize > end + 8) return;
+    yield { name, start: pos + hdr, end: pos + bsize };
+    pos += bsize;
+  }
+}
+function findChild(dv, start, end, name) { for (const b of childBoxes(dv, start, end)) if (b.name === name) return b; return null; }
+
+/* ---------- GoPro MET -raidan sample-taulukot ---------- */
+function parseGpmdTrack(moov, mvStart, mvEnd) {
+  for (const trak of childBoxes(moov, mvStart, mvEnd)) {
+    if (trak.name !== 'trak') continue;
+    const mdia = findChild(moov, trak.start, trak.end, 'mdia'); if (!mdia) continue;
+    const minf = findChild(moov, mdia.start, mdia.end, 'minf'); if (!minf) continue;
+    const stbl = findChild(moov, minf.start, minf.end, 'stbl'); if (!stbl) continue;
+    const stsd = findChild(moov, stbl.start, stbl.end, 'stsd'); if (!stsd) continue;
+    if (str4(moov, stsd.start + 12) !== 'gpmd') continue;
+
+    const mdhd = findChild(moov, mdia.start, mdia.end, 'mdhd');
+    const ver = moov.getUint8(mdhd.start);
+    const timescale = ver === 1 ? moov.getUint32(mdhd.start + 20) : moov.getUint32(mdhd.start + 12);
+
+    const stsz = findChild(moov, stbl.start, stbl.end, 'stsz');
+    const defSize = moov.getUint32(stsz.start + 4);
+    const count = moov.getUint32(stsz.start + 8);
+    const sizes = [];
+    for (let i = 0; i < count; i++) sizes.push(defSize || moov.getUint32(stsz.start + 12 + i * 4));
+
+    let offs = [];
+    const stco = findChild(moov, stbl.start, stbl.end, 'stco');
+    const co64 = findChild(moov, stbl.start, stbl.end, 'co64');
+    if (stco) { const n = moov.getUint32(stco.start + 4); for (let i = 0; i < n; i++) offs.push(moov.getUint32(stco.start + 8 + i * 4)); }
+    else if (co64) { const n = moov.getUint32(co64.start + 4); for (let i = 0; i < n; i++) offs.push(Number(moov.getBigUint64(co64.start + 8 + i * 8))); }
+    else continue;
+
+    const stsc = findChild(moov, stbl.start, stbl.end, 'stsc');
+    const scn = moov.getUint32(stsc.start + 4);
+    const scEntries = [];
+    for (let i = 0; i < scn; i++) scEntries.push({ first: moov.getUint32(stsc.start + 8 + i * 12), per: moov.getUint32(stsc.start + 12 + i * 12) });
+
+    const stts = findChild(moov, stbl.start, stbl.end, 'stts');
+    const tn = moov.getUint32(stts.start + 4);
+    const times = []; let t = 0;
+    for (let i = 0; i < tn; i++) {
+      const c = moov.getUint32(stts.start + 8 + i * 8), d = moov.getUint32(stts.start + 12 + i * 8);
+      for (let j = 0; j < c; j++) { times.push(t / timescale); t += d; }
+    }
+
+    const samples = []; let si = 0;
+    for (let ci = 0; ci < offs.length && si < count; ci++) {
+      let per = 1;
+      for (const e of scEntries) if (ci + 1 >= e.first) per = e.per;
+      let off = offs[ci];
+      for (let k = 0; k < per && si < count; k++) { samples.push({ off, size: sizes[si], t: times[si] || 0 }); off += sizes[si]; si++; }
+    }
+    return samples;
+  }
+  return null;
+}
+
+/* ---------- GPMF-payloadin GPS-piste (GPS5 tai GPS9) ---------- */
+function extractGps(dv, start, end) {
+  function scan(s, e) {
+    let pos = s, localScal = null, res = null;
+    while (pos + 8 <= e) {
+      const key = str4(dv, pos), type = dv.getUint8(pos + 4), ssz = dv.getUint8(pos + 5), rep = dv.getUint16(pos + 6);
+      const len = ssz * rep, ds = pos + 8;
+      if (ds + len > e + 4) break;
+      if (type === 0) {
+        const r = scan(ds, Math.min(ds + len, e));
+        if (r && !res) res = r;
+      } else if (key === 'SCAL') {
+        localScal = [];
+        if (type === 108) { for (let i = 0; i < Math.floor(len / 4); i++) localScal.push(dv.getInt32(ds + i * 4)); }
+        else if (type === 115) { for (let i = 0; i < Math.floor(len / 2); i++) localScal.push(dv.getInt16(ds + i * 2)); }
+      } else if (key === 'GPS9' && localScal && localScal.length >= 2 && ssz >= 32 && rep > 0 && !res) {
+        for (let i = 0; i < rep; i++) {
+          const o = ds + i * ssz;
+          const fix = ssz === 32 ? dv.getUint16(o + 30) : 1;
+          if (fix > 0) { res = { lat: dv.getInt32(o) / localScal[0], lon: dv.getInt32(o + 4) / localScal[1] }; break; }
+        }
+      } else if (key === 'GPS5' && localScal && localScal.length >= 2 && ssz === 20 && rep > 0 && !res) {
+        res = { lat: dv.getInt32(ds) / localScal[0], lon: dv.getInt32(ds + 4) / localScal[1] };
+      }
+      pos = ds + Math.ceil(len / 4) * 4;
+    }
+    return res;
+  }
+  return scan(start, end);
+}
+
+async function extractTrack(file) {
+  const moovHdr = await findTopBox(file, 'moov');
+  if (!moovHdr) return [];
+  const moov = new DataView(await file.slice(moovHdr.pos, moovHdr.pos + moovHdr.size).arrayBuffer());
+  const samples = parseGpmdTrack(moov, moovHdr.hdr, moovHdr.size);
+  if (!samples || !samples.length) return [];
+  const pts = [];
+  for (const s of samples) {
+    if (s.size < 8 || s.size > 500000) continue;
+    try {
+      const dv = await sliceDV(file, s.off, s.size);
+      const g = extractGps(dv, 0, s.size);
+      if (g && Math.abs(g.lat) <= 90 && Math.abs(g.lon) <= 180 && (g.lat !== 0 || g.lon !== 0)) pts.push({ t: s.t, lat: g.lat, lon: g.lon });
+    } catch (e) { /* ohita rikkinäinen payload */ }
+  }
+  return pts;
+}
+
+/* ---------- Tiedoston valinta ---------- */
+$('file-input').addEventListener('change', async e => {
+  const file = e.target.files[0];
+  if (!file) return;
+  st('Luetaan GPS-telemetriaa videosta...', 'loading');
+  track = [];
+  try { track = await extractTrack(file); } catch (err) { track = []; }
+  if (!track.length) {
+    st('Videosta ei löytynyt GPS-telemetriaa (GPMF). Käytä alkuperäistä GoPro-tiedostoa, jossa GPS oli päällä.', 'error');
+    return;
+  }
+  const video = $('video');
+  video.src = URL.createObjectURL(file);
+  $('video-wrap').classList.add('active');
+  $('addr-box').style.display = 'block';
+  $('shot-btn').disabled = false;
+  drawTrack();
+  st('GPS-reitti luettu (' + track.length + ' pistettä) – toista video tai napauta reittiä', 'success');
+  tick();
+});
+
+function drawTrack() {
+  const latlngs = track.map(p => [p.lat, p.lon]);
+  if (poly) map.removeLayer(poly);
+  if (marker) map.removeLayer(marker);
+  poly = L.polyline(latlngs, { color:'#4cc9f0', weight:4, opacity:0.85 }).addTo(map);
+  poly.on('click', e => {
+    let bi = 0, bd = Infinity;
+    track.forEach((p, i) => {
+      const d = (p.lat - e.latlng.lat) * (p.lat - e.latlng.lat) + (p.lon - e.latlng.lng) * (p.lon - e.latlng.lng);
+      if (d < bd) { bd = d; bi = i; }
+    });
+    $('video').currentTime = track[bi].t;
+  });
+  marker = L.marker(latlngs[0]).addTo(map);
+  map.fitBounds(poly.getBounds(), { padding: [20, 20] });
+}
+
+/* ---------- Toiston seuranta ---------- */
+function curPoint() {
+  const t = $('video').currentTime;
+  let lo = 0, hi = track.length - 1;
+  while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (track[mid].t <= t) lo = mid; else hi = mid - 1; }
+  return track[lo];
+}
+function tick() {
+  if (!track.length) return;
+  const p = curPoint();
+  curPointRef = p;
+  marker.setLatLng([p.lat, p.lon]);
+  $('addr-meta').textContent = fmtTime($('video').currentTime) + ' | ' + p.lat.toFixed(6) + ', ' + p.lon.toFixed(6);
+  fetchAddr(p);
+}
+$('video').addEventListener('timeupdate', tick);
+$('video').addEventListener('seeked', tick);
+
+/* ---------- Tierekisteriosoitteen haku (viitekehysmuunnin) ---------- */
+function parseFeature(data) {
+  if (data && data.type === 'FeatureCollection' && data.features && data.features.length > 0) {
+    const props = data.features[0].properties;
+    if (props.virheet) return null;
+    if (props.tie !== undefined && props.osa !== undefined && props.etaisyys !== undefined) {
+      return { tie: props.tie, tieosa: props.osa, etaisyys: props.etaisyys, tienimi: props.tienimi || null, distance: props.valimatka || 0 };
+    }
+  }
+  return null;
+}
+function gridKey(p) { return p.lat.toFixed(4) + '_' + p.lon.toFixed(4); }
+
+async function fetchAddr(p) {
+  const key = gridKey(p);
+  if (key in addrCache) { showAddr(addrCache[key]); return; }
+  if (inflight) return;
+  inflight = true;
+  try {
+    const r = proj4("EPSG:4326", "EPSG:3067", [p.lon, p.lat]);
+    const url = 'https://avoinapi.vaylapilvi.fi/viitekehysmuunnin/muunna?x=' + Math.round(r[0]) + '&y=' + Math.round(r[1]) + '&sade=100&palautusarvot=1,2,3,4,5,6&vaylan_luonne=' + LUONNE_ALL;
+    const resp = await fetch(url);
+    addrCache[key] = resp.ok ? parseFeature(await resp.json()) : null;
+  } catch (e) { addrCache[key] = null; }
+  inflight = false;
+  if (curPointRef && gridKey(curPointRef) === key) showAddr(addrCache[key]);
+}
+function showAddr(addr) {
+  curAddr = addr;
+  if (addr) {
+    $('addr-main').textContent = addr.tie + ' / ' + addr.tieosa + ' / ' + addr.etaisyys;
+    $('addr-sub').textContent = (addr.tienimi ? addr.tienimi + ' · ' : '') + (addr.distance > 0 ? Math.round(addr.distance) + ' m tiestä' : 'Tiellä');
+  } else {
+    $('addr-main').textContent = 'Ei tietä ≤ 100 m';
+    $('addr-sub').textContent = '';
+  }
+}
+
+/* ---------- Kuvakaappaus osoitteella ---------- */
+function takeShot() {
+  const video = $('video');
+  if (!video.videoWidth) { alert('Toista videota ensin hetki.'); return; }
+  const c = document.createElement('canvas');
+  c.width = video.videoWidth; c.height = video.videoHeight;
+  const ctx = c.getContext('2d');
+  ctx.drawImage(video, 0, 0);
+
+  const w = c.width, h = c.height;
+  const mainSize = Math.max(20, Math.round(w / 30));
+  const metaSize = Math.max(12, Math.round(w / 55));
+  const boxHeight = mainSize + metaSize * 2 + 50;
+  ctx.fillStyle = 'rgba(0,0,0,0.65)';
+  ctx.fillRect(0, h - boxHeight, w, boxHeight);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#4cc9f0';
+  ctx.font = 'bold ' + mainSize + 'px -apple-system, sans-serif';
+  ctx.fillText(curAddr ? ('Tierekisteri: ' + curAddr.tie + ' / ' + curAddr.tieosa + ' / ' + curAddr.etaisyys) : 'Ei tierekisteriosoitetta', w / 2, h - boxHeight + mainSize + 10);
+  ctx.fillStyle = '#9be8ff';
+  ctx.font = 'bold ' + metaSize + 'px -apple-system, sans-serif';
+  if (curAddr && curAddr.tienimi) ctx.fillText(curAddr.tienimi, w / 2, h - boxHeight + mainSize + metaSize + 18);
+  ctx.fillStyle = '#ccc';
+  ctx.font = metaSize + 'px -apple-system, sans-serif';
+  const meta = (curPointRef ? curPointRef.lat.toFixed(6) + ', ' + curPointRef.lon.toFixed(6) + ' | ' : '') + 'video ' + fmtTime(video.currentTime) + ' | ' + new Date().toLocaleString('fi-FI');
+  ctx.fillText(meta, w / 2, h - 12);
+
+  c.toBlob(async b => {
+    if (!b) return;
+    const filename = 'tierekisteri_gopro_' + Date.now() + '.jpg';
+    if (navigator.share && navigator.canShare) {
+      const f = new File([b], filename, { type: 'image/jpeg' });
+      if (navigator.canShare({ files: [f] })) {
+        try { await navigator.share({ files: [f], title: 'Tierekisteriosoite' }); st('Kuva jaettu/tallennettu!', 'success'); return; } catch (e) {}
+      }
+    }
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(b);
+    link.download = filename;
+    link.click();
+    st('Kuva ladattu!', 'success');
+  }, 'image/jpeg', 0.92);
+}
+</script>
+</body>
+</html>
