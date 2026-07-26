@@ -85,6 +85,11 @@
     background:rgba(20,20,40,0.85); border:2px solid #4cc9f0; color:#4cc9f0;
     width:38px; height:38px; border-radius:10px; font-size:1.1em; cursor:pointer;
   }
+  .map-recenter-btn {
+    position:absolute; top:52px; right:8px; z-index:500;
+    background:rgba(20,20,40,0.85); border:2px solid #00c853; color:#00c853;
+    width:38px; height:38px; border-radius:10px; font-size:1em; cursor:pointer;
+  }
 
   /* ---------- radius control ---------- */
   .radius-bar {
@@ -175,7 +180,7 @@
 <div id="page-home">
   <div class="topbar">
     <h1>🛣️ Tierekisteriosoite <span class="auto-dot">● AUTO</span></h1>
-    <div style="display:flex; gap:6px;">
+    <div style="display:flex; gap:5px;">
       <button class="top-btn" onclick="location.href='gopro.html'">🎬 GoPro</button>
       <button class="top-btn" onclick="showGallery()">🖼️ Galleria</button>
     </div>
@@ -210,6 +215,7 @@
   <div class="map-wrap">
     <div id="map"></div>
     <button class="map-expand-btn" onclick="toggleMapExpand()" id="map-expand-btn">⤢</button>
+    <button class="map-recenter-btn" onclick="recenterMap()" id="map-recenter-btn">🎯</button>
   </div>
 
   <div class="radius-bar">
@@ -289,6 +295,7 @@ let watchId = null;
 let fetchBusy = false;
 let lastFetchPos = null;
 let mapExpanded = false;
+let userMovedMap = false;  // true kun käyttäjä on liikuttanut karttaa
 
 let isVideoMode = false;
 let mediaRecorder = null;
@@ -393,14 +400,27 @@ function calculateHeading(pLat, pLon, cLat, cLon) {
    MAP
    ============================================================ */
 function initMap() {
-  map = L.map('map', { zoomControl: true }).setView([65.0, 25.5], 5);
+  map = L.map('map', {
+    zoomControl: true,
+    dragging: true,
+    scrollWheelZoom: true,
+    tap: true,
+    inertia: true
+  }).setView([65.0, 25.5], 5);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution:'© OpenStreetMap' }).addTo(map);
+  map.on('dragstart', () => { userMovedMap = true; });
 }
 function toggleMapExpand() {
   mapExpanded = !mapExpanded;
   document.getElementById('info-box').classList.toggle('collapsed', mapExpanded);
   document.getElementById('map-expand-btn').textContent = mapExpanded ? '⤡' : '⤢';
   setTimeout(() => map.invalidateSize(), 260);
+}
+function recenterMap() {
+  userMovedMap = false;
+  if (currentPosition) {
+    map.setView([currentPosition.lat, currentPosition.lon], Math.max(map.getZoom(), 16));
+  }
 }
 
 /* ============================================================
@@ -554,7 +574,7 @@ async function fetchAndDisplay(force) {
   if (!currentPosition || fetchBusy) return;
   if (!force && lastFetchPos) {
     const d = distMeters(lastFetchPos.lat, lastFetchPos.lon, currentPosition.lat, currentPosition.lon);
-    if (d < 5) return;
+    if (d < 5) return;  // päivitä vähintään 5 m välein
   }
   fetchBusy = true;
   lastFetchPos = { ...currentPosition };
@@ -666,7 +686,9 @@ function handlePosition(position) {
   document.getElementById('coords').textContent = `📍 ${lat.toFixed(6)}, ${lon.toFixed(6)}`;
 
   if (map) {
-    map.setView([lat, lon], Math.max(map.getZoom(), 15));
+    if (!userMovedMap) {
+      map.setView([lat, lon], Math.max(map.getZoom(), 15));
+    }
     if (marker) marker.setLatLng([lat, lon]); else marker = L.marker([lat, lon]).addTo(map);
     if (accuracyCircle) map.removeLayer(accuracyCircle);
     accuracyCircle = L.circle([lat, lon], { radius: currentAccuracy, color:'#4cc9f0', fillColor:'#4cc9f0', fillOpacity:0.1, weight:1 }).addTo(map);
@@ -684,12 +706,17 @@ function handleError(error) {
 }
 function startWatching() {
   if (watchId !== null) navigator.geolocation.clearWatch(watchId);
-  watchId = navigator.geolocation.watchPosition(handlePosition, handleError, { enableHighAccuracy:true, timeout:15000, maximumAge:2000 });
+  watchId = navigator.geolocation.watchPosition(handlePosition, handleError, {
+    enableHighAccuracy: true,
+    timeout: 10000,
+    maximumAge: 0,
+    distanceFilter: 5
+  });
 }
 function manualRefresh() {
   setStatus('Haetaan sijaintia...', 'loading');
   document.getElementById('info-box').classList.add('loading');
-  navigator.geolocation.getCurrentPosition(p => { handlePosition(p); fetchAndDisplay(true); }, handleError, { enableHighAccuracy:true, timeout:15000, maximumAge:0 });
+  navigator.geolocation.getCurrentPosition(p => { handlePosition(p); fetchAndDisplay(true); }, handleError, { enableHighAccuracy:true, timeout:10000, maximumAge:0 });
 }
 
 /* ============================================================
